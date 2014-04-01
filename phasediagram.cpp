@@ -85,7 +85,7 @@ using namespace boost::algorithm;
 #define USE_CXXLAPACK
 
 
-#ifdef AMAZON
+#if defined(AMAZON) || defined(FSTSERVER)
 #include <lapacke.h>
 extern "C" void openblas_set_num_threads(int num_threads);
 #else
@@ -306,7 +306,7 @@ void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<do
                     }
                 }
 
-#ifdef AMAZON
+#if defined(AMAZON) || defined(FSTSERVER)
                 LAPACKE_dstev(LAPACK_COL_MAJOR, job, dim, D.data(), E.data(), Z.data(), ldz);
 #else
                 dstev_(&job, &dimvar, D.data(), E.data(), Z.data(), &ldz, work.data(), &info);
@@ -377,7 +377,7 @@ void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<do
  */
 int main(int argc, char** argv) {
 
-#ifdef AMAZON
+#if defined(AMAZON) || defined(FSTSERVER)
     openblas_set_num_threads(1);
 #endif
 
