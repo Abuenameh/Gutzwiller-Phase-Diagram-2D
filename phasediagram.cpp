@@ -108,21 +108,22 @@ template<typename T> void printMath(ostream& out, string name, int i, T& t) {
     out << name << "[" << i << "]" << "=" << ::math(t) << ";" << endl;
 }
 
-#define L 50
+#define L 900
+#define TWOD true
 #define nmax 7
 #define dim (nmax+1)
 //#define I complex<double>(0, 1)
 
 typedef mat::fixed<dim, dim> Operator;
 typedef Operator Hamiltonian;
-typedef vec::fixed<L> MeanField;
-typedef vec::fixed<L> Observable;
-typedef vec::fixed<L> Parameter;
-typedef mat::fixed<L, L> SiteMatrix;
-typedef mat::fixed<L, L> AdjacencyMatrix;
-typedef mat::fixed<L, L> HoppingMatrix;
-typedef vec::fixed<L> SiteVector;
-typedef mat::fixed<L, L> HoppingMatrix;
+typedef vec MeanField;
+typedef vec Observable;
+typedef vec Parameter;
+typedef mat SiteMatrix;
+typedef mat AdjacencyMatrix;
+typedef mat HoppingMatrix;
+typedef vec SiteVector;
+typedef mat HoppingMatrix;
 typedef vec::fixed<dim> Eigenvalues;
 typedef mat::fixed<dim, dim> Eigenvectors;
 typedef vec::fixed<dim> SiteState;
@@ -145,6 +146,14 @@ double chop(double x) {
 inline int mod(int i) {
     return (i + L) % L;
     //    return ((i - 1 + L) % L) + 1;
+}
+
+inline int mod(int i, int l) {
+    return (i + l) % l;
+}
+
+inline int ij(int i, int j, int l) {
+    return i * l + j;
 }
 
 double M = 1000;
@@ -179,7 +188,7 @@ ArrayL JW(ArrayL W) {
 
 Parameter JW(Parameter W) {
     Parameter v = W / sqrt(g * g + W % W);
-    Parameter J;
+    Parameter J(L);
     for (int i = 0; i < L - 1; i++) {
         J[i] = alpha * v[i] * v[i + 1];
     }
@@ -212,9 +221,9 @@ struct Point {
     double mu;
 };
 
-AdjacencyMatrix Aij, Bij;
+AdjacencyMatrix Aij(L, L), Bij(L, L);
 
-void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<double, 2 >& fc, multi_array<double, 2 >& fs, multi_array<MeanField, 2>& ares, progress_display& progress) {
+void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<double, 2 >& fc, multi_array<double, 2 >& fs, multi_array<MeanField, 2>& ares, bool savea, multi_array<SiteVector, 2>& phires, multi_array<Observable, 2>& nres, multi_array<AdjacencyMatrix, 2>& fsmat, progress_display& progress) {
 
     Operator Id, ni, bai, bci, bi;
 
@@ -233,22 +242,22 @@ void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<do
     Operator n2i = ni * ni;
     Operator n2ni = n2i - ni;
 
-    MeanField a, anew, da;
-    Observable n;
+    MeanField a(L), anew(L), da(L);
+    Observable n(L);
     double Da;
 
     Hamiltonian H;
     Eigenvalues eigvals;
     Eigenvectors eigvecs;
 
-    SiteMatrix amat;
+    SiteMatrix amat(L, L);
 
-    SiteMatrix A;
-    SiteVector b;
-    SiteVector phi;
+    SiteMatrix A(L, L);
+    SiteVector b(L);
+    SiteVector phi(L);
 
-    SiteMatrix rho;
-    SiteVector evals;
+    SiteMatrix rho(L, L);
+    SiteVector evals(L);
 
     char job = 'V';
     int dimvar = dim;
@@ -272,12 +281,14 @@ void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<do
         a.fill(0.1);
 
         double x = point.x;
-        Parameter Wrand = x * xi;
+//        Parameter Wrand = x * xi;
+        Parameter Wrand(L);
+        Wrand.fill(x);
         double Uav = 2 * UW(x); //1; //UW(Wrand).sum()/L;
         double Jav = mean(JW(Wrand)); //0;// = JW(Wrand).mean(); //sum()/L;
         Parameter U = UW(Wrand); // / Uav;
         U /= Uav;
-        HoppingMatrix J;
+        HoppingMatrix J(L, L);
         for (int i = 0; i < L; i++) {
             for (int j = 0; j < L; j++) {
                 J(i, j) = JWij(Wrand[i], Wrand[j]) / Uav;
@@ -297,10 +308,10 @@ void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<do
 
             for (int i = 0; i < L; i++) {
 
-                double aj = sum(JAij.col(i) % a);
+                double aj = dot(JAij.col(i), a);
 
                 for (int n = 0; n <= nmax; n++) {
-                    D[n] = U[i] * n * (n - 1) - mu * n;
+                    D[n] = U[i] * n * (n - 1) - mu * n + (xi[i] - 1) * n;
                     if (n < nmax) {
                         E[n] = aj * sqrt(n + 1);
                     }
@@ -327,6 +338,11 @@ void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<do
             Da = max(abs(a) - abs(anew));
             a = anew;
         }
+        
+        if (savea) {
+            ares[point.i][point.j] = a;
+            nres[point.i][point.j] = n;
+        }
 
         double N = 0;
         for (int i = 0; i < L; i++) {
@@ -334,15 +350,24 @@ void phasepoints(Parameter& xi, double eps, queue<Point>& points, multi_array<do
         }
 
         amat = repmat(a.t(), L, 1);
-        A = diagmat(JAij.t() * a) - JAij.t() % amat;
-        b = JBij.t() * a;
-
+        A = diagmat(JAij * a) - JAij % amat;
+        b = JBij * a;
+        
         phi = pinv(A) * b;
+        if (savea) {
+            phires[point.i][point.j] = phi;
+        }
 
+        if (savea) {
+            fsmat[point.i][point.j].zeros(L, L);
+        }
         double fsij = 0;
         for (int i = 0; i < L; i++) {
             for (int j = 0; j < L; j++) {
-                fsij += JAij(i, j) * a[i] * a[j] * (Bij(i, j) + phi[i] - phi[j]) * (Bij(i, j) + phi[i] - phi[j]);
+                if (savea) {
+                    fsmat[point.i][point.j](i, j) = JAij(i, j) * a[i] * a[j] * (Bij(j, i) + phi[i] - phi[j]) * (Bij(j, i) + phi[i] - phi[j]);
+                }
+                fsij += JAij(i, j) * a[i] * a[j] * (Bij(j, i) + phi[i] - phi[j]) * (Bij(j, i) + phi[i] - phi[j]);
             }
         }
         fsij /= 2 * J(0, 0) * N;
@@ -422,14 +447,22 @@ int main(int argc, char** argv) {
 
     int resi = lexical_cast<int>(argv[12]);
 
+    bool savea = lexical_cast<bool>(argv[13]);
+
 #ifdef AMAZON
     path resdir("/home/ubuntu/Dropbox/Amazon EC2/Simulation Results/Gutzwiller Phase Diagram");
+#elif defined(FSTSERVER)
+    path resdir("C:/Users/abuenameh/Documents/Simulation Results/Gutzwiller Phase Diagram 2D");
 #else
     //    path resdir("/Users/Abuenameh/Dropbox/Amazon EC2/Simulation Results/Gutzwiller Phase Diagram");
     path resdir("/Users/Abuenameh/Documents/Simulation Results/Gutzwiller Phase Diagram 2D");
 #endif
     if (!exists(resdir)) {
         cerr << "Results directory " << resdir << " does not exist!" << endl;
+        exit(1);
+    }
+    if (TWOD && round(sqrt(L)) != sqrt(L)) {
+        cerr << "Lattice isn't square!" << endl;
         exit(1);
     }
     for (int iseed = 0; iseed < nseed; iseed++, seed++) {
@@ -452,7 +485,7 @@ int main(int argc, char** argv) {
             resfile = resdir / oss.str();
         }
 
-        Parameter xi;
+        Parameter xi(L);
         xi.fill(1);
         //        xi.assign(1);
         rng.seed(seed);
@@ -478,16 +511,57 @@ int main(int argc, char** argv) {
 
         Aij.zeros();
         Bij.zeros();
-        for (int i = 0; i < L; i++) {
-            Aij(i, mod(i - 1)) = 1;
-            Aij(i, mod(i + 1)) = 1;
-            Bij(i, mod(i - 1)) = -1;
-            Bij(i, mod(i + 1)) = 1;
+        if (TWOD) {
+            int l = (int) sqrt(L);
+            for (int i = 0; i < l; i++) {
+                for (int j = 0; j < l; j++) {
+                    int i1 = mod(i - 1, l);
+                    int i2 = mod(i + 1, l);
+                    int j1 = mod(j - 1, l);
+                    int j2 = mod(j + 1, l);
+                    Aij(ij(i, j, l), ij(i, j1, l)) = 1;
+                    Aij(ij(i, j, l), ij(i, j2, l)) = 1;
+                    Aij(ij(i, j, l), ij(i1, j, l)) = 1;
+                    Aij(ij(i, j, l), ij(i2, j, l)) = 1;
+                    
+                    Bij(ij(i, j, l), ij(i, j1, l)) = -1;
+                    Bij(ij(i, j, l), ij(i, j2, l)) = 1;
+//                                        Bij(ij(i, j, l), ij(i1, j, l)) = -1;
+//                                        Bij(ij(i, j, l), ij(i2, j, l)) = 1;
+//                                        Bij(ij(i, j, l), ij(i1, j, l)) = -1;
+//                                        Bij(ij(i, j, l), ij(i2, j, l)) = 1;
+                }
+            }
+        } else {
+            for (int i = 0; i < L; i++) {
+                Aij(i, mod(i - 1)) = 1;
+                Aij(i, mod(i + 1)) = 1;
+                Bij(i, mod(i - 1)) = -1;
+                Bij(i, mod(i + 1)) = 1;
+            }
         }
+//        AdjacencyMatrix Bijji = Bij + Bij.t();
+//        printMath(os, "Bijji", resi, Bijji);
+//        printMath(os, "Bij", resi, Bij);
 
         multi_array<double, 2 > fcres(extents[nx][nmu]);
         multi_array<double, 2 > fsres(extents[nx][nmu]);
-        multi_array<MeanField, 2> ares(extents[1][1]);
+        //        multi_array<MeanField, 2> ares(extents[1][1]);
+        multi_array<MeanField, 2> ares;
+        multi_array<SiteVector, 2> phires;
+        multi_array<Observable, 2> nres;
+        multi_array<AdjacencyMatrix, 2> fsmat;
+        if (savea) {
+            ares.resize(extents[nx][nmu]);
+            phires.resize(extents[nx][nmu]);
+            nres.resize(extents[nx][nmu]);
+            fsmat.resize(extents[nx][nmu]);
+        } else {
+            ares.resize(extents[1][1]);
+            phires.resize(extents[1][1]);
+            nres.resize(extents[1][1]);
+            fsmat.resize(extents[1][1]);
+        }
 
         progress_display progress(nx * nmu);
 
@@ -506,13 +580,19 @@ int main(int argc, char** argv) {
 
         thread_group threads;
         for (int i = 0; i < numthreads; i++) {
-            threads.create_thread(bind(&phasepoints, boost::ref(xi), eps, boost::ref(points), boost::ref(fcres), boost::ref(fsres), boost::ref(ares), boost::ref(progress)));
+            threads.create_thread(bind(&phasepoints, boost::ref(xi), eps, boost::ref(points), boost::ref(fcres), boost::ref(fsres), boost::ref(ares), savea, boost::ref(phires), boost::ref(nres), boost::ref(fsmat), boost::ref(progress)));
         }
         threads.join_all();
 
 
         printMath(os, "fcres", resi, fcres);
         printMath(os, "fsres", resi, fsres);
+        if (savea) {
+            printMath(os, "ares", resi, ares);
+            printMath(os, "phires", resi, phires);
+            printMath(os, "nres", resi, nres);
+            printMath(os, "fsmat", resi, fsmat);
+        }
 
         ptime end = microsec_clock::local_time();
         time_period period(begin, end);
